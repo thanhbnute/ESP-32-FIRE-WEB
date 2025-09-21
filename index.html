@@ -28,9 +28,28 @@
     .tag-err{ background:#4a1d1d; color:#fecaca; }
     .log-text { white-space:pre-wrap; word-break:break-word; }
     .controls { display:flex; gap:8px; margin-bottom:8px; align-items:center; }
+    .muted { opacity:.65 }
+
+    /* Ô LED hiển thị trạng thái */
+    .ledbox {
+      height: 84px; border-radius:12px; display:flex; align-items:center; justify-content:center;
+      background:#334155; color:#e2e8f0; font-weight:800; letter-spacing:1px; font-size:18px;
+      box-shadow: inset 0 0 0 2px rgba(255,255,255,.04);
+      user-select:none;
+    }
+    .ledbox.alarm {
+      background:#7f1d1d; color:#fecaca; box-shadow:0 0 0 2px #7f1d1d, 0 0 18px rgba(127,29,29,.55) inset;
+      animation: alarmPulse 1s ease-in-out infinite;
+    }
+    @keyframes alarmPulse {
+      0%   { filter:brightness(1.0); transform:scale(1.00); }
+      50%  { filter:brightness(1.25); transform:scale(1.02); }
+      100% { filter:brightness(1.0); transform:scale(1.00); }
+    }
+
+    /* Banner cảnh báo */
     .banner { display:none; position:fixed; inset:0; place-items:center; background:rgba(0,0,0,.6); }
     .banner .inner { background:#1b0b0b; border:2px solid #7f1d1d; padding:24px; border-radius:16px; text-align:center; }
-    .muted { opacity:.65 }
   </style>
 </head>
 <body>
@@ -42,27 +61,33 @@
       <h3>Kết nối MQTT</h3>
       <div class="row">
         <input id="brokerUrl" style="flex:1 1 320px" value="wss://test.mosquitto.org:8081/mqtt" />
-        <input id="rootBase" value="iot/fire" title="Gốc topic. Firmware dùng iot/fire/&lt;chipId&gt;/..." />
+        <input id="rootBase" value="iot/fire" title="Gốc topic. Firmware: iot/fire/&lt;chipId&gt;/..." />
         <button id="btnConnect">Kết nối</button>
         <span id="connState" class="pill warn">Chưa kết nối</span>
       </div>
-      <small>Firmware đang publish: <code>iot/fire/&lt;chipIdHex&gt;/...</code> (VD: <code>iot/fire/6c3b015c/telemetry</code>)</small>
+      <small>Thiết bị publish: <code>iot/fire/&lt;chipIdHex&gt;/...</code></small>
     </div>
 
-    <!-- Trạng thái + chọn thiết bị + điều khiển -->
+    <!-- Thiết bị + LED indicator + điều khiển -->
     <div class="card">
       <h3>Thiết bị</h3>
       <div class="row">
-        <label for="deviceSel">Chọn thiết bị:</label>
+        <label for="deviceSel">Chọn:</label>
         <select id="deviceSel" style="min-width:160px"><option value="">(chưa phát hiện)</option></select>
         <span id="devStatus" class="pill warn">unknown</span>
       </div>
       <p class="muted" id="devBase">(chưa có)</p>
 
-      <p>Nhiệt độ: <b id="tempNow">--</b> °C • Độ ẩm: <b id="humNow">--</b> % • Khói: <b id="smokeNow">--</b></p>
+      <div class="grid" style="grid-template-columns:1fr 1fr; gap:12px; margin:8px 0 10px;">
+        <div class="ledbox" id="ledBox">⚪ SAFE</div>
+        <div style="display:flex; flex-direction:column; gap:6px; justify-content:center;">
+          <div>Nhiệt độ: <b id="tempNow">--</b> °C</div>
+          <div>Độ ẩm: <b id="humNow">--</b> %</div>
+          <div>Khói: <b id="smokeNow">--</b></div>
+        </div>
+      </div>
 
-      <div class="row" style="margin-top:10px;">
-        <button id="btnSilence">Tắt chuông 60s</button>
+      <div class="row">
         <button id="btnClear">CLEAR ALARM</button>
         <button id="btnLedOn">LED ON</button>
         <button id="btnLedOff">LED OFF</button>
@@ -78,7 +103,7 @@
           <select id="mode">
             <option value="realtime">Realtime</option>
             <option value="today">Trong ngày (theo giờ)</option>
-            <option value="session">Theo buổi (sáng/trưa/chiều/tối)</option>
+            <option value="session">Theo buổi</option>
           </select>
         </div>
       </div>
@@ -97,14 +122,13 @@
     </div>
   </div>
 
-  <!-- Cảnh báo -->
+  <!-- Banner cảnh báo -->
   <div id="alertBanner" class="banner">
     <div class="inner">
       <h2>⚠️ PHÁT HIỆN CHÁY</h2>
       <p id="alertText">Chi tiết...</p>
       <div class="row" style="justify-content:center; margin-top:12px;">
         <button id="btnAck">Đã hiểu</button>
-        <button id="btnAckSilence">Tắt chuông 60s</button>
       </div>
     </div>
   </div>
@@ -113,16 +137,14 @@
     <source src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=" type="audio/wav">
   </audio>
 
-  <!-- Thư viện -->
   <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
   <script>
-    // ===== Helpers =====
+    // ===== Helpers & Log =====
     const $ = (id) => document.getElementById(id);
     const setConnState = (s, cls='warn') => { const el=$('connState'); el.textContent=s; el.className='pill '+cls; };
-    const logStore=[];
-    const nowTs = () => new Date().toLocaleTimeString();
+    const logStore=[]; const nowTs = () => new Date().toLocaleTimeString();
     function logLine(kind,text){
       const list=$('logList'), scroller=$('logWrap');
       const line=document.createElement('div'); line.className='log-line';
@@ -139,7 +161,7 @@
     // ===== State =====
     let client=null;
     let rootBase='iot/fire';
-    const devices = new Map(); // chipId -> {status, lastTele, dataRealtime:[], dataToday:Map}
+    const devices = new Map(); // chipId -> {status, lastTele, dataRealtime:[], dataToday:Map, alarm:false}
 
     // ===== Chart =====
     const chart=new Chart($('chart').getContext('2d'),{
@@ -175,24 +197,36 @@
     }
     $('mode').addEventListener('change',()=>redrawChart($('deviceSel').value));
 
-    // ===== UI state =====
+    // ===== UI bindings =====
     function setDevStatus(txt, cls='warn'){ const el=$('devStatus'); el.textContent=txt; el.className='pill '+cls; }
+    function updateLed(chip){
+      const dev=devices.get(chip);
+      const box=$('ledBox');
+      if(!dev || !dev.alarm){
+        box.classList.remove('alarm');
+        box.textContent='⚪ SAFE';
+      } else {
+        box.classList.add('alarm');
+        box.textContent='🔴 ALARM';
+      }
+    }
     function updateTopFields(chip){
       const dev=devices.get(chip);
       $('devBase').textContent = chip ? `${rootBase}/${chip}/...` : '(chưa có)';
-      if(!dev){ $('tempNow').textContent='--'; $('humNow').textContent='--'; $('smokeNow').textContent='--'; setDevStatus('unknown','warn'); return; }
+      if(!dev){ $('tempNow').textContent='--'; $('humNow').textContent='--'; $('smokeNow').textContent='--'; setDevStatus('unknown','warn'); updateLed(''); return; }
       const tele=dev.lastTele||{};
       $('tempNow').textContent=typeof tele.temp_c==='number'?tele.temp_c.toFixed(1):'--';
       $('humNow').textContent=(tele.hum??'--');
       $('smokeNow').textContent=(tele.smoke_raw??'--');
       setDevStatus(dev.status==='online'?'online':'offline', dev.status==='online'?'ok':'bad');
+      updateLed(chip);
       redrawChart(chip);
     }
 
     // ===== Device discovery =====
     function addDeviceIfNeeded(chip){
       if(!devices.has(chip)){
-        devices.set(chip,{status:'unknown', lastTele:null, dataRealtime:[], dataToday:new Map()});
+        devices.set(chip,{status:'unknown', lastTele:null, dataRealtime:[], dataToday:new Map(), alarm:false});
         const opt=document.createElement('option'); opt.value=chip; opt.textContent=chip; $('deviceSel').appendChild(opt);
         if(!$('deviceSel').value){ $('deviceSel').value=chip; updateTopFields(chip); }
       }
@@ -209,20 +243,19 @@
       if('Notification' in window && Notification.permission==='granted') new Notification('Phát hiện cháy',{body:text});
     }
     $('btnAck').onclick=()=>{ $('alertBanner').style.display='none'; };
-    $('btnAckSilence').onclick=()=>{ const chip=$('deviceSel').value; if(chip) publish(`${rootBase}/${chip}/cmd/buzzer`, 'silence:60'); $('alertBanner').style.display='none'; };
 
     // ===== MQTT =====
     function connect(){
       const url=$('brokerUrl').value.trim();
       rootBase=($('rootBase').value.trim()||'iot/fire').replace(/\/+$/,'');
       ensureNotif();
-      client=mqtt.connect(url,{clientId:'webdash-'+Math.random().toString(16).slice(2), keepalive:60, clean:true});
+      const opts={clientId:'webdash-'+Math.random().toString(16).slice(2), keepalive:60, clean:true};
+      const sub = `${rootBase}/+/+`;
+      client=mqtt.connect(url,opts);
       client.on('connect',()=>{
         setConnState('Đã kết nối','ok');
         logLine('sys',`[MQTT] connected to ${url}`);
-        // subscribe mọi thiết bị dưới root
-        const sub = `${rootBase}/+/+`;
-        client.subscribe(sub, (err)=>{ if(err) logLine('err', 'subscribe error: '+err.message); else logLine('sys', 'subscribed: '+sub); });
+        client.subscribe(sub, (err)=>{ if(err) logLine('err','subscribe error: '+err.message); else logLine('sys','subscribed: '+sub); });
       });
       client.on('reconnect',()=>setConnState('Đang kết nối lại...','warn'));
       client.on('close',()=>setConnState('Mất kết nối','bad'));
@@ -230,24 +263,21 @@
       client.on('message',(topic,msg)=>handleMsg(topic, msg.toString()));
     }
     function publish(topic,payload){ if(!client||!client.connected) return; client.publish(topic,payload); logLine('tx',`→ ${topic}: ${payload}`); }
-
     function parseChip(topic){
-      // expecting rootBase/<chipId>/<leaf>
-      const t = topic.split('/');
-      const rb = rootBase.split('/').length;
-      return t[rb]; // phần tử ngay sau root
+      // rootBase/<chipId>/<leaf>
+      const t = topic.split('/'); const rb = rootBase.split('/').length; return t[rb];
     }
 
     function handleMsg(topic,s){
       logLine('rx',`← ${topic}: ${s}`);
-      const chip = parseChip(topic);
-      if(!chip) return;
+      const chip = parseChip(topic); if(!chip) return;
       addDeviceIfNeeded(chip);
       const dev = devices.get(chip);
 
       if(topic.endsWith('/status')){
         dev.status = s.trim();
         if($('deviceSel').value===chip) updateTopFields(chip);
+
       } else if(topic.endsWith('/telemetry')){
         try{
           const o=JSON.parse(s);
@@ -260,19 +290,19 @@
             if(!dev.dataToday.has(h)) dev.dataToday.set(h,[]);
             dev.dataToday.get(h).push(o.temp_c);
           }
+          if(typeof o.alarm==='boolean') dev.alarm = o.alarm;
           if($('deviceSel').value===chip) updateTopFields(chip);
         }catch(e){ logLine('err','JSON parse telemetry: '+e.message); }
+
       } else if(topic.endsWith('/alert')){
-        try{ const p=JSON.parse(s); showAlert(chip,p); } catch{ showAlert(chip,{ts:Date.now()/1000, temp_c:'?', smoke_raw:'?'}) }
-      } else if(topic.endsWith('/ack')){
-        // chỉ log ACK
+        try{ const p=JSON.parse(s); dev.alarm=true; if($('deviceSel').value===chip) updateLed(chip); showAlert(chip,p); }
+        catch{ dev.alarm=true; if($('deviceSel').value===chip) updateLed(chip); showAlert(chip,{ts:Date.now()/1000, temp_c:'?', smoke_raw:'?'}) }
       }
     }
 
     // ===== Buttons =====
     $('btnConnect').onclick=connect;
-    $('btnSilence').onclick=()=>{ const chip=$('deviceSel').value; if(chip) publish(`${rootBase}/${chip}/cmd/buzzer`, 'silence:60'); };
-    $('btnClear').onclick =()=>{ const chip=$('deviceSel').value; if(chip) publish(`${rootBase}/${chip}/cmd/alarm`, 'clear'); };
+    $('btnClear').onclick =()=>{ const chip=$('deviceSel').value; if(chip){ publish(`${rootBase}/${chip}/cmd/alarm`, 'clear'); const d=devices.get(chip); if(d){ d.alarm=false; updateLed(chip); } } };
     $('btnLedOn').onclick =()=>{ const chip=$('deviceSel').value; if(chip) publish(`${rootBase}/${chip}/cmd/led`, 'on'); };
     $('btnLedOff').onclick=()=>{ const chip=$('deviceSel').value; if(chip) publish(`${rootBase}/${chip}/cmd/led`, 'off'); };
   </script>
