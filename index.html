@@ -18,10 +18,6 @@
     button { background:#334155; color:#e2e8f0; border:none; padding:10px 14px; border-radius:10px; cursor:pointer; font-weight:600; transition:filter .15s; }
     button:hover { filter:brightness(1.1); }
 
-    /* Màu “trạng thái” cho NÚT */
-    .btn-green { background:#166534 !important; color:#dcfce7 !important; } /* xanh */
-    /* xám = màu button mặc định (#334155) */
-
     .pill { padding:4px 10px; border-radius:999px; font-weight:700; }
     .ok{ background:#193d2f; color:#86efac; } .bad{ background:#4a1d1d; color:#fecaca; } .warn{ background:#3b2d14; color:#fde68a; }
 
@@ -35,7 +31,7 @@
     .tag-rx{  background:#12381e; color:#86efac; }
     .tag-tx{  background:#0f2d3a; color:#93c5fd; }
     .tag-sys{ background:#2a2438; color:#e9d5ff; }
-    .tag-err{  background:#4a1d1d; color:#fecaca; }
+    .tag-err{ background:#4a1d1d; color:#fecaca; }
     .log-text { white-space:pre-wrap; word-break:break-word; }
     .controls { display:flex; gap:8px; margin-bottom:8px; align-items:center; }
 
@@ -160,13 +156,23 @@
     function updateChartSession(){ const b={'Sáng':[],'Trưa':[],'Chiều':[],'Tối':[]}; for(const {t,v} of dataRealtime){const h=t.getHours(); if(h>=5&&h<11)b['Sáng'].push(v); else if(h>=11&&h<13)b['Trưa'].push(v); else if(h>=13&&h<17)b['Chiều'].push(v); else if(h>=17&&h<22)b['Tối'].push(v);} const avg=a=>a.length?(a.reduce((s,x)=>s+x,0)/a.length):null; chart.data.labels=Object.keys(b); chart.data.datasets[0].data=Object.values(b).map(avg); chart.update(); }
     $('mode').addEventListener('change',()=>{ const m=$('mode').value; if(m==='realtime')updateChartRealtime(); else if(m==='today')updateChartToday(); else updateChartSession(); });
 
-    // ===== Nút màu theo yêu cầu =====
+    // ===== Màu nút theo trạng thái (dùng inline style để chắc ăn) =====
+    function setBtnGreen(el, active){
+      if(active){
+        el.style.background = '#166534';
+        el.style.color = '#dcfce7';
+      }else{
+        el.style.background = '#334155';
+        el.style.color = '#e2e8f0';
+      }
+    }
     function refreshButtons(){
-      // LED ON: xanh khi alarmState=true, xám khi không
-      $('btnLedOn').classList.toggle('btn-green', alarmState===true);
-      // Tắt chuông 60s: xanh khi đang báo, xám khi không
-      $('btnSilence').classList.toggle('btn-green', alarmState===true);
-      // LED OFF giữ màu xám mặc định
+      // Yêu cầu của bạn: có cháy => LED ON xanh; không cháy => xám
+      setBtnGreen($('btnLedOn'), alarmState===true);
+      // Đang báo => nút tắt chuông xanh; không báo => xám
+      setBtnGreen($('btnSilence'), alarmState===true);
+      // LED OFF luôn xám
+      setBtnGreen($('btnLedOff'), false);
     }
     function setAlarm(on){
       alarmState = !!on;
@@ -191,7 +197,7 @@
       topicBase=$('topicBase').value.trim() || 'iot/fire1';
       ensureNotif();
       client=mqtt.connect(url,{clientId:'webdash-'+Math.random().toString(16).slice(2), keepalive:60, clean:true});
-      client.on('connect',()=>{ setConnState('Đã kết nối','ok'); logLine('sys',`[MQTT] connected to ${url}`); client.subscribe(`${topicBase}/#`); });
+      client.on('connect',()=>{ setConnState('Đã kết nối','ok'); logLine('sys',`[MQTT] connected to ${url}`); client.subscribe(`${topicBase}/#`); refreshButtons(); });
       client.on('reconnect',()=>setConnState('Đang kết nối lại...','warn'));
       client.on('close',()=>setConnState('Mất kết nối','bad'));
       client.on('error',e=>{ logLine('err','[MQTT error] '+e.message); setConnState('Lỗi','bad'); });
@@ -206,16 +212,17 @@
       } else if(topic.endsWith('/telemetry')){
         try{
           const o=JSON.parse(s);
+          const t=new Date(((o.ts??(Date.now()/1000)))*1000);
           if(typeof o.temp_c==='number') $('tempNow').textContent=o.temp_c.toFixed(1); else $('tempNow').textContent=o.temp_c ?? '--';
           $('humNow').textContent=o.hum ?? '--';
           $('smokeNow').textContent=o.smoke_raw ?? '--';
 
-          const t=new Date(((o.ts??(Date.now()/1000)))*1000);
           dataRealtime.push({t, v:o.temp_c}); if(dataRealtime.length>200) dataRealtime.shift();
           const h=t.getHours(); if(!dataToday.has(h)) dataToday.set(h,[]); if(typeof o.temp_c==='number') dataToday.get(h).push(o.temp_c);
 
-          // Suy ra có cháy?
-          const isFire=((typeof o.smoke_raw==='number') && o.smoke_raw>=SMOKE_THRESHOLD) || ((typeof o.temp_c==='number') && o.temp_c>=TEMP_THRESHOLD);
+          // Có cháy?
+          const isFire = ((typeof o.smoke_raw==='number') && o.smoke_raw>=SMOKE_THRESHOLD) ||
+                         ((typeof o.temp_c==='number') && o.temp_c>=TEMP_THRESHOLD);
           setAlarm(isFire);
 
           const m=$('mode').value; if(m==='realtime') updateChartRealtime(); else if(m==='today') updateChartToday(); else updateChartSession();
@@ -224,7 +231,7 @@
         try{ const p=JSON.parse(s); setAlarm(true); showAlert(p); }
         catch{ setAlarm(true); showAlert({ts:Date.now()/1000, temp_c:'?', smoke_raw:'?'}); }
       } else if(topic.endsWith('/state/buzzer')){
-        // nếu ESP32 publish state/buzzer => đồng bộ màu nút
+        // nếu ESP32 publish state/buzzer thì đồng bộ
         const v=s.trim().toLowerCase(); setAlarm(v==='on');
       }
     }
@@ -232,8 +239,8 @@
     // ===== Buttons =====
     $('btnConnect').onclick=connect;
     $('btnSilence').onclick=()=>{ publish(`${topicBase}/cmd/buzzer`, 'silence:60'); setAlarm(false); };
-    $('btnLedOn').onclick =()=>{ publish(`${topicBase}/cmd/led`, 'on');  /* màu nút phụ thuộc alarmState, không phụ thuộc LED thật */ refreshButtons(); };
-    $('btnLedOff').onclick=()=>{ publish(`${topicBase}/cmd/led`, 'off'); /* giữ xám */ refreshButtons(); };
+    $('btnLedOn').onclick =()=>{ publish(`${topicBase}/cmd/led`, 'on');  refreshButtons(); };
+    $('btnLedOff').onclick=()=>{ publish(`${topicBase}/cmd/led`, 'off'); refreshButtons(); };
   </script>
 </body>
 </html>
