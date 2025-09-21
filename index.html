@@ -1,10 +1,4 @@
-# Create a ready-to-deploy web folder with index.html and zip it for download
-import os, zipfile, textwrap, json, pathlib, sys
-
-web_dir = "/mnt/data/esp32-fire-web"
-os.makedirs(web_dir, exist_ok=True)
-
-html = """<!doctype html>
+<!doctype html>
 <html lang="vi">
 <head>
   <meta charset="utf-8" />
@@ -31,7 +25,7 @@ html = """<!doctype html>
   </style>
 </head>
 <body>
-  <h1>🔥 Fire Alert Dashboard</h1>
+  <h1>🔥 HỆ THỐNG CẢNH BÁO CHÁY</h1>
 
   <div class="grid">
     <!-- Kết nối -->
@@ -236,15 +230,3 @@ html = """<!doctype html>
   </script>
 </body>
 </html>
-"""
-
-# Write index.html
-with open(os.path.join(web_dir, "index.html"), "w", encoding="utf-8") as f:
-    f.write(html)
-
-# Zip it
-zip_path = "/mnt/data/esp32-fire-web.zip"
-with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
-    z.write(os.path.join(web_dir, "index.html"), arcname="index.html")
-
-zip_path
