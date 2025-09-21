@@ -47,6 +47,13 @@
       100% { filter:brightness(1.0); transform:scale(1.00); }
     }
 
+    /* Nút đang active (sáng) */
+    button.active{
+      background:#166534 !important;
+      color:#dcfce7 !important;
+      box-shadow:0 0 0 2px #14532d inset;
+    }
+
     /* Banner cảnh báo */
     .banner { display:none; position:fixed; inset:0; place-items:center; background:rgba(0,0,0,.6); }
     .banner .inner { background:#1b0b0b; border:2px solid #7f1d1d; padding:24px; border-radius:16px; text-align:center; }
@@ -199,6 +206,14 @@
 
     // ===== UI bindings =====
     function setDevStatus(txt, cls='warn'){ const el=$('devStatus'); el.textContent=txt; el.className='pill '+cls; }
+
+    function updateLedButtons(chip){
+      const dev = devices.get(chip);
+      const isOn = !!(dev && dev.alarm); // LED bật khi đang báo động (alarm-latched)
+      $('btnLedOn').classList.toggle('active',  isOn);
+      $('btnLedOff').classList.toggle('active', !isOn);
+    }
+
     function updateLed(chip){
       const dev=devices.get(chip);
       const box=$('ledBox');
@@ -209,11 +224,16 @@
         box.classList.add('alarm');
         box.textContent='🔴 ALARM';
       }
+      updateLedButtons(chip);
     }
+
     function updateTopFields(chip){
       const dev=devices.get(chip);
       $('devBase').textContent = chip ? `${rootBase}/${chip}/...` : '(chưa có)';
-      if(!dev){ $('tempNow').textContent='--'; $('humNow').textContent='--'; $('smokeNow').textContent='--'; setDevStatus('unknown','warn'); updateLed(''); return; }
+      if(!dev){
+        $('tempNow').textContent='--'; $('humNow').textContent='--'; $('smokeNow').textContent='--';
+        setDevStatus('unknown','warn'); updateLed(''); return;
+      }
       const tele=dev.lastTele||{};
       $('tempNow').textContent=typeof tele.temp_c==='number'?tele.temp_c.toFixed(1):'--';
       $('humNow').textContent=(tele.hum??'--');
@@ -250,12 +270,12 @@
       rootBase=($('rootBase').value.trim()||'iot/fire').replace(/\/+$/,'');
       ensureNotif();
       const opts={clientId:'webdash-'+Math.random().toString(16).slice(2), keepalive:60, clean:true};
-      const sub = `${rootBase}/+/+`;
       client=mqtt.connect(url,opts);
       client.on('connect',()=>{
         setConnState('Đã kết nối','ok');
         logLine('sys',`[MQTT] connected to ${url}`);
-        client.subscribe(sub, (err)=>{ if(err) logLine('err','subscribe error: '+err.message); else logLine('sys','subscribed: '+sub); });
+        const sub = `${rootBase}/+/+`;
+        client.subscribe(sub, (err)=>{ if(err) logLine('err','subscribe error: '+err?.message||err); else logLine('sys','subscribed: '+sub); });
       });
       client.on('reconnect',()=>setConnState('Đang kết nối lại...','warn'));
       client.on('close',()=>setConnState('Mất kết nối','bad'));
@@ -291,18 +311,26 @@
             dev.dataToday.get(h).push(o.temp_c);
           }
           if(typeof o.alarm==='boolean') dev.alarm = o.alarm;
-          if($('deviceSel').value===chip) updateTopFields(chip);
+          if($('deviceSel').value===chip){ updateTopFields(chip); updateLedButtons(chip); }
         }catch(e){ logLine('err','JSON parse telemetry: '+e.message); }
 
       } else if(topic.endsWith('/alert')){
-        try{ const p=JSON.parse(s); dev.alarm=true; if($('deviceSel').value===chip) updateLed(chip); showAlert(chip,p); }
-        catch{ dev.alarm=true; if($('deviceSel').value===chip) updateLed(chip); showAlert(chip,{ts:Date.now()/1000, temp_c:'?', smoke_raw:'?'}) }
+        try{ const p=JSON.parse(s); dev.alarm=true; if($('deviceSel').value===chip){ updateLed(chip); updateLedButtons(chip); } showAlert(chip,p); }
+        catch{ dev.alarm=true; if($('deviceSel').value===chip){ updateLed(chip); updateLedButtons(chip); } showAlert(chip,{ts:Date.now()/1000, temp_c:'?', smoke_raw:'?'}) }
       }
     }
 
     // ===== Buttons =====
     $('btnConnect').onclick=connect;
-    $('btnClear').onclick =()=>{ const chip=$('deviceSel').value; if(chip){ publish(`${rootBase}/${chip}/cmd/alarm`, 'clear'); const d=devices.get(chip); if(d){ d.alarm=false; updateLed(chip); } } };
+
+    $('btnClear').onclick =()=>{
+      const chip=$('deviceSel').value;
+      if(chip){
+        publish(`${rootBase}/${chip}/cmd/alarm`, 'clear');
+        const d=devices.get(chip);
+        if(d){ d.alarm=false; updateLed(chip); updateLedButtons(chip); }
+      }
+    };
     $('btnLedOn').onclick =()=>{ const chip=$('deviceSel').value; if(chip) publish(`${rootBase}/${chip}/cmd/led`, 'on'); };
     $('btnLedOff').onclick=()=>{ const chip=$('deviceSel').value; if(chip) publish(`${rootBase}/${chip}/cmd/led`, 'off'); };
   </script>
