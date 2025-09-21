@@ -1,0 +1,250 @@
+# Create a ready-to-deploy web folder with index.html and zip it for download
+import os, zipfile, textwrap, json, pathlib, sys
+
+web_dir = "/mnt/data/esp32-fire-web"
+os.makedirs(web_dir, exist_ok=True)
+
+html = """<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Fire Alert Dashboard (ESP32 + MQTT)</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <style>
+    :root { font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 16px; background:#0b1020; color:#e8edf7; }
+    h1 { margin: 0 0 16px; }
+    .grid { display:grid; gap:16px; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); }
+    .card { background:#121833; border:1px solid #20295a; border-radius:16px; padding:16px; box-shadow:0 10px 24px rgba(0,0,0,.25); }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    input, select { background:#0f172a; color:#e2e8f0; border:1px solid #334155; padding:8px 10px; border-radius:8px; }
+    button { background:#334155; color:#e2e8f0; border:none; padding:10px 14px; border-radius:10px; cursor:pointer; font-weight:600; }
+    button:hover { filter:brightness(1.1); }
+    .pill { padding:4px 10px; border-radius:999px; font-weight:700; }
+    .ok{ background:#193d2f; color:#86efac; } .bad{ background:#4a1d1d; color:#fecaca; } .warn{ background:#3b2d14; color:#fde68a; }
+    pre { max-height:240px; overflow:auto; background:#0f172a; border-radius:8px; padding:12px; }
+    .banner { position:fixed; inset:0; display:none; place-items:center; background:rgba(0,0,0,.6); }
+    .banner .inner { background:#1b0b0b; border:2px solid #7f1d1d; padding:24px; border-radius:16px; text-align:center; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    canvas { background:#0f172a; border-radius:12px; padding:8px; }
+  </style>
+</head>
+<body>
+  <h1>🔥 Fire Alert Dashboard</h1>
+
+  <div class="grid">
+    <!-- Kết nối -->
+    <div class="card">
+      <h3>Kết nối MQTT</h3>
+      <div class="row">
+        <input id="brokerUrl" style="flex:1 1 320px" value="wss://test.mosquitto.org:8081/mqtt" />
+        <input id="topicBase" value="iot/fire1" />
+        <button id="btnConnect">Kết nối</button>
+        <span id="connState" class="pill warn">Chưa kết nối</span>
+      </div>
+      <small class="mono">Gợi ý: với trình duyệt, đa số broker WebSocket dùng đường dẫn <code>/mqtt</code>. Nếu trang chạy HTTPS, hãy dùng <b>wss://</b>.</small>
+    </div>
+
+    <!-- Trạng thái hiện tại -->
+    <div class="card">
+      <h3>Trạng thái thiết bị</h3>
+      <p>Thiết bị: <b id="devStatus">unknown</b></p>
+      <p>Nhiệt độ: <b id="tempNow">--</b> °C — Độ ẩm: <b id="humNow">--</b> %</p>
+      <p>Khói (ADC): <b id="smokeNow">--</b></p>
+      <div class="row" style="margin-top:8px;">
+        <button id="btnSilence">Tắt chuông 60s</button>
+        <button id="btnLedOn">LED ON</button>
+        <button id="btnLedOff">LED OFF</button>
+      </div>
+    </div>
+
+    <!-- Biểu đồ -->
+    <div class="card" style="grid-column:1/-1;">
+      <div class="row" style="justify-content:space-between;">
+        <h3 style="margin:0">Biểu đồ nhiệt độ</h3>
+        <div class="row">
+          <label for="mode">Chế độ:</label>
+          <select id="mode">
+            <option value="realtime">Realtime</option>
+            <option value="today">Trong ngày (theo giờ)</option>
+            <option value="session">Theo buổi (sáng/trưa/chiều/tối)</option>
+          </select>
+        </div>
+      </div>
+      <canvas id="chart" height="140"></canvas>
+    </div>
+
+    <!-- Log -->
+    <div class="card" style="grid-column:1/-1;">
+      <h3>Log</h3>
+      <pre id="log">—</pre>
+    </div>
+  </div>
+
+  <!-- Cảnh báo -->
+  <div id="alertBanner" class="banner">
+    <div class="inner">
+      <h2>⚠️ PHÁT HIỆN CHÁY</h2>
+      <p id="alertText">Chi tiết...</p>
+      <div class="row" style="justify-content:center; margin-top:12px;">
+        <button id="btnAck">Đã hiểu</button>
+        <button id="btnAckSilence">Tắt chuông 60s</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Beep nhẹ (tùy chọn) -->
+  <audio id="beep" preload="auto">
+    <source src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=" type="audio/wav">
+  </audio>
+
+  <!-- Thư viện -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <script>
+    // ====== Helpers ======
+    const $ = (id) => document.getElementById(id);
+    const log = (x) => { const el = $('log'); el.textContent = (el.textContent==='—'?'':el.textContent + "\\n") + x; el.scrollTop = el.scrollHeight; };
+    function setConnState(s, cls='warn') { const el=$('connState'); el.textContent=s; el.className = `pill ${cls}`; }
+
+    // ====== State ======
+    let client = null;
+    let topicBase = 'iot/fire1';
+    let dataRealtime = [];     // {t:Date, v:number}
+    let dataToday = new Map(); // hour -> [vals]
+
+    // ====== Chart ======
+    const ctx = $('chart').getContext('2d');
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: { labels: [], datasets: [{ label: 'Nhiệt độ (°C)', data: [], fill:false, tension: .2 }] },
+      options: { responsive: true, scales: { y: { beginAtZero:false } } }
+    });
+
+    function updateChartRealtime() {
+      chart.data.labels = dataRealtime.map(p => p.t.toLocaleTimeString());
+      chart.data.datasets[0].data = dataRealtime.map(p => p.v);
+      chart.update();
+    }
+    function updateChartToday() {
+      const hours = [...dataToday.keys()].sort((a,b)=>a-b);
+      const avg = (arr) => arr.reduce((s,x)=>s+x,0)/arr.length;
+      chart.data.labels = hours.map(h=>h+':00');
+      chart.data.datasets[0].data = hours.map(h=> avg(dataToday.get(h)));
+      chart.update();
+    }
+    function updateChartSession() {
+      const buckets = { 'Sáng':[], 'Trưa':[], 'Chiều':[], 'Tối':[] };
+      for (const {t,v} of dataRealtime) {
+        const h = t.getHours();
+        if (h>=5 && h<11) buckets['Sáng'].push(v);
+        else if (h>=11 && h<13) buckets['Trưa'].push(v);
+        else if (h>=13 && h<17) buckets['Chiều'].push(v);
+        else if (h>=17 && h<22) buckets['Tối'].push(v);
+      }
+      const avg = (arr) => arr.length? (arr.reduce((s,x)=>s+x,0)/arr.length) : null;
+      chart.data.labels = Object.keys(buckets);
+      chart.data.datasets[0].data = Object.values(buckets).map(avg);
+      chart.update();
+    }
+    $('mode').addEventListener('change', () => {
+      const m = $('mode').value;
+      if (m==='realtime') updateChartRealtime();
+      else if (m==='today') updateChartToday();
+      else updateChartSession();
+    });
+
+    // ====== Notifications ======
+    function ensureNotif() {
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+    }
+    function showAlert(payload) {
+      const text = `🔥 FIRE @ ${new Date(payload.ts*1000).toLocaleString()} — T=${payload.temp_c}°C, smoke=${payload.smoke_raw}`;
+      $('alertText').textContent = text;
+      $('alertBanner').style.display = 'grid';
+      try { $('beep').play(); } catch {}
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('Phát hiện cháy', { body: text });
+      }
+    }
+    $('btnAck').onclick = () => { $('alertBanner').style.display = 'none'; };
+    $('btnAckSilence').onclick = () => { publish(`${topicBase}/cmd/buzzer`, 'silence:60'); $('alertBanner').style.display = 'none'; };
+
+    // ====== MQTT ======
+    function connect() {
+      const url = $('brokerUrl').value.trim();
+      topicBase = $('topicBase').value.trim() || 'iot/fire1';
+      ensureNotif();
+
+      client = mqtt.connect(url, { clientId: 'webdash-' + Math.random().toString(16).slice(2), keepalive: 60, clean: true });
+
+      client.on('connect', () => {
+        setConnState('Đã kết nối','ok');
+        log(`[MQTT] connected to ${url}`);
+        client.subscribe(`${topicBase}/#`);
+      });
+      client.on('reconnect', () => setConnState('Đang kết nối lại...', 'warn'));
+      client.on('close', () => setConnState('Mất kết nối', 'bad'));
+      client.on('error', (e) => { log('[MQTT error] ' + e.message); setConnState('Lỗi', 'bad'); });
+      client.on('message', (topic, msg) => handleMsg(topic, msg.toString()));
+    }
+
+    function publish(topic, payload) {
+      if (!client || client.disconnected) return;
+      client.publish(topic, payload);
+      log(`→ ${topic}: ${payload}`);
+    }
+
+    function handleMsg(topic, s) {
+      log(`← ${topic}: ${s}`);
+      if (topic.endsWith('/status')) {
+        $('devStatus').textContent = s;
+      } else if (topic.endsWith('/telemetry')) {
+        try {
+          const o = JSON.parse(s);
+          $('tempNow').textContent = o.temp_c?.toFixed?.(1) ?? o.temp_c;
+          $('humNow').textContent = o.hum;
+          $('smokeNow').textContent = o.smoke_raw;
+
+          const t = new Date((o.ts || Date.now()/1000)*1000);
+          dataRealtime.push({ t, v: o.temp_c });
+          if (dataRealtime.length>200) dataRealtime.shift();
+
+          const h = t.getHours();
+          if (!dataToday.has(h)) dataToday.set(h, []);
+          dataToday.get(h).push(o.temp_c);
+
+          const m = $('mode').value;
+          if (m==='realtime') updateChartRealtime();
+          else if (m==='today') updateChartToday();
+          else updateChartSession();
+        } catch {}
+      } else if (topic.endsWith('/alert')) {
+        try { showAlert(JSON.parse(s)); }
+        catch { showAlert({ ts: Date.now()/1000, temp_c: '?', smoke_raw: '?' }); }
+      }
+    }
+
+    $('btnConnect').onclick = connect;
+    $('btnSilence').onclick = () => publish(`${topicBase}/cmd/buzzer`, 'silence:60');
+    $('btnLedOn').onclick   = () => publish(`${topicBase}/cmd/led`, 'on');
+    $('btnLedOff').onclick  = () => publish(`${topicBase}/cmd/led`, 'off');
+  </script>
+</body>
+</html>
+"""
+
+# Write index.html
+with open(os.path.join(web_dir, "index.html"), "w", encoding="utf-8") as f:
+    f.write(html)
+
+# Zip it
+zip_path = "/mnt/data/esp32-fire-web.zip"
+with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
+    z.write(os.path.join(web_dir, "index.html"), arcname="index.html")
+
+zip_path
