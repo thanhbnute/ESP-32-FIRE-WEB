@@ -8,24 +8,19 @@
   <style>
     :root { font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; }
     body { margin: 16px; background:#0b1020; color:#e8edf7; transition: background .25s ease; }
-    body.alarm { background:#0e2f1b; } /* nền xanh khi chuông đang báo */
+    body.alarm { background:#0e2f1b; } /* nền trang xanh khi chuông đang báo (có thể bỏ nếu không thích) */
 
     h1 { margin: 0 0 16px; }
     .grid { display:grid; gap:16px; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); }
     .card { background:#121833; border:1px solid #20295a; border-radius:16px; padding:16px; box-shadow:0 10px 24px rgba(0,0,0,.25); }
     .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
     input, select { background:#0f172a; color:#e2e8f0; border:1px solid #334155; padding:8px 10px; border-radius:8px; }
-    button { background:#334155; color:#e2e8f0; border:none; padding:10px 14px; border-radius:10px; cursor:pointer; font-weight:600; }
+    button { background:#334155; color:#e2e8f0; border:none; padding:10px 14px; border-radius:10px; cursor:pointer; font-weight:600; transition: filter .15s; }
     button:hover { filter:brightness(1.1); }
-    .pill { padding:4px 10px; border-radius:999px; font-weight:700; display:inline-flex; align-items:center; gap:6px; }
-    .ok{ background:#193d2f; color:#86efac; } .bad{ background:#4a1d1d; color:#fecaca; } .warn{ background:#3b2d14; color:#fde68a; }
 
-    /* LED pills */
-    .led-on { background:#173a2a; color:#86efac; }     /* xanh */
-    .led-off{ background:#4a1d1d; color:#fecaca; }     /* đỏ  */
-    .icon-dot { width:10px; height:10px; border-radius:999px; background:#94a3b8; }
-    .icon-dot.green { background:#22c55e; }
-    .icon-dot.red   { background:#ef4444; }
+    /* màu trạng thái ngay trên NÚT */
+    .btn-green { background:#166534 !important; color:#dcfce7 !important; } /* LED ON / Chuông đang báo */
+    .btn-red   { background:#7f1d1d !important; color:#fee2e2 !important; } /* LED OFF */
 
     canvas { background:#0f172a; border-radius:12px; padding:8px; }
 
@@ -53,25 +48,16 @@
         <input id="brokerUrl" style="flex:1 1 320px" value="wss://test.mosquitto.org:8081/mqtt" />
         <input id="topicBase" value="iot/fire1" />
         <button id="btnConnect">Kết nối</button>
-        <span id="connState" class="pill warn">Chưa kết nối</span>
+        <span id="connState" class="pill warn" style="padding:4px 10px;border-radius:999px;font-weight:700;background:#3b2d14;color:#fde68a;">Chưa kết nối</span>
       </div>
       <small>Gợi ý: đa số broker WebSocket dùng đường dẫn <code>/mqtt</code>. Nếu trang chạy HTTPS, hãy dùng <b>wss://</b>.</small>
     </div>
 
-    <!-- Trạng thái hiện tại -->
+    <!-- Trạng thái + nút điều khiển -->
     <div class="card">
       <h3>Trạng thái thiết bị</h3>
       <p>Thiết bị: <b id="devStatus">unknown</b></p>
-      <p>Nhiệt độ: <b id="tempNow">--</b> °C — Độ ẩm: <b id="humNow">--</b> %</p>
-      <p>Khói (ADC): <b id="smokeNow">--</b></p>
-
-      <div class="row" style="align-items:center; margin-top:6px;">
-        <span>LED:</span>
-        <span id="ledPill" class="pill">
-          <span id="ledDot" class="icon-dot"></span>
-          <span id="ledText">—</span>
-        </span>
-      </div>
+      <p>Nhiệt độ: <b id="tempNow">--</b> °C — Độ ẩm: <b id="humNow">--</b> % — Khói (ADC): <b id="smokeNow">--</b></p>
 
       <div class="row" style="margin-top:10px;">
         <button id="btnSilence">Tắt chuông 60s</button>
@@ -132,7 +118,7 @@
   <script>
     // ====== Helpers ======
     const $ = (id) => document.getElementById(id);
-    function setConnState(s, cls='warn') { const el=$('connState'); el.textContent=s; el.className = `pill ${cls}`; }
+    function setConnState(s, cls='warn') { const el=$('connState'); el.textContent=s; el.className = 'pill ' + cls; el.style.padding='4px 10px'; el.style.borderRadius='999px'; el.style.fontWeight='700'; }
 
     // ---- Log helpers (dòng, timestamp, nhãn) ----
     const logStore = [];
@@ -171,17 +157,22 @@
     function updateChartSession(){ const b={'Sáng':[],'Trưa':[],'Chiều':[],'Tối':[]}; for(const {t,v} of dataRealtime){const h=t.getHours(); if(h>=5&&h<11)b['Sáng'].push(v); else if(h>=11&&h<13)b['Trưa'].push(v); else if(h>=13&&h<17)b['Chiều'].push(v); else if(h>=17&&h<22)b['Tối'].push(v);} const avg=a=>a.length?(a.reduce((s,x)=>s+x,0)/a.length):null; chart.data.labels=Object.keys(b); chart.data.datasets[0].data=Object.values(b).map(avg); chart.update(); }
     $('mode').addEventListener('change',()=>{ const m=$('mode').value; if(m==='realtime')updateChartRealtime(); else if(m==='today')updateChartToday(); else updateChartSession(); });
 
-    // ====== LED pill UI ======
-    function updateLedPill(){
-      const pill=$('ledPill'), dot=$('ledDot'), text=$('ledText');
-      pill.classList.remove('led-on','led-off'); dot.classList.remove('green','red');
-      if(ledState===true){ pill.classList.add('led-on'); dot.classList.add('green'); text.textContent='ON'; }
-      else if(ledState===false){ pill.classList.add('led-off'); dot.classList.add('red'); text.textContent='OFF'; }
-      else { text.textContent='—'; }
+    // ====== Cập nhật màu cho NÚT dựa trên trạng thái ======
+    function updateButtons(){
+      const onBtn=$('btnLedOn'), offBtn=$('btnLedOff'), silBtn=$('btnSilence');
+      // LED buttons
+      onBtn.classList.remove('btn-green','btn-red');
+      offBtn.classList.remove('btn-green','btn-red');
+      if(ledState===true){ onBtn.classList.add('btn-green'); }       // LED ON => xanh trên nút "LED ON"
+      else if(ledState===false){ offBtn.classList.add('btn-red'); }  // LED OFF => đỏ trên nút "LED OFF"
+      // Silence button reflects alarm
+      silBtn.classList.remove('btn-green');
+      if(alarmState===true){ silBtn.classList.add('btn-green'); }    // đang báo => "Tắt chuông 60s" xanh
     }
     function setAlarm(on){
       alarmState=on;
-      document.body.classList.toggle('alarm', on); // nền xanh khi báo
+      document.body.classList.toggle('alarm', on); // (nếu không muốn đổi nền trang, xóa dòng này)
+      updateButtons();
     }
 
     // ====== Notifications ======
@@ -215,8 +206,7 @@
       } else if(topic.endsWith('/telemetry')){
         try{
           const o=JSON.parse(s);
-          if(typeof o.temp_c==='number') $('tempNow').textContent=o.temp_c.toFixed(1);
-          else $('tempNow').textContent=o.temp_c ?? '--';
+          if(typeof o.temp_c==='number') $('tempNow').textContent=o.temp_c.toFixed(1); else $('tempNow').textContent=o.temp_c ?? '--';
           $('humNow').textContent=o.hum ?? '--';
           $('smokeNow').textContent=o.smoke_raw ?? '--';
 
@@ -227,16 +217,16 @@
           // Suy ra báo động từ ngưỡng
           const isFire=((typeof o.smoke_raw==='number') && o.smoke_raw>=SMOKE_THRESHOLD) || ((typeof o.temp_c==='number') && o.temp_c>=TEMP_THRESHOLD);
           setAlarm(isFire);
+
           const m=$('mode').value; if(m==='realtime') updateChartRealtime(); else if(m==='today') updateChartToday(); else updateChartSession();
         }catch{}
       } else if(topic.endsWith('/alert')){
         try{ const p=JSON.parse(s); setAlarm(true); showAlert(p); }
         catch{ setAlarm(true); showAlert({ts:Date.now()/1000,temp_c:'?',smoke_raw:'?'}); }
       } else if(topic.endsWith('/state/led')){
-        // Nếu ESP32 có publish state/led
-        const v=s.trim().toLowerCase(); ledState=(v==='on')?true:(v==='off')?false:null; updateLedPill();
+        // Nếu ESP32 publish state/led (khuyên dùng để đồng bộ đúng)
+        const v=s.trim().toLowerCase(); ledState=(v==='on')?true:(v==='off')?false:null; updateButtons();
       } else if(topic.endsWith('/state/buzzer')){
-        // Nếu ESP32 có publish state/buzzer
         const v=s.trim().toLowerCase(); setAlarm(v==='on');
       }
     }
@@ -244,8 +234,8 @@
     // ====== Buttons ======
     $('btnConnect').onclick=connect;
     $('btnSilence').onclick=()=>{ publish(`${topicBase}/cmd/buzzer`, 'silence:60'); setAlarm(false); };
-    $('btnLedOn').onclick =()=>{ publish(`${topicBase}/cmd/led`, 'on');  ledState=true;  updateLedPill(); };
-    $('btnLedOff').onclick=()=>{ publish(`${topicBase}/cmd/led`, 'off'); ledState=false; updateLedPill(); };
+    $('btnLedOn').onclick =()=>{ publish(`${topicBase}/cmd/led`, 'on');  ledState=true;  updateButtons(); };
+    $('btnLedOff').onclick=()=>{ publish(`${topicBase}/cmd/led`, 'off'); ledState=false; updateButtons(); };
   </script>
 </body>
 </html>
