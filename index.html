@@ -7,20 +7,23 @@
   <link rel="preconnect" href="https://unpkg.com">
   <style>
     :root { font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; }
-    body { margin: 16px; background:#0b1020; color:#e8edf7; transition: background .25s ease; }
-    body.alarm { background:#0e2f1b; } /* nền trang xanh khi chuông đang báo (có thể bỏ nếu không thích) */
+    body { margin:16px; background:#0b1020; color:#e8edf7; }
 
-    h1 { margin: 0 0 16px; }
+    h1 { margin:0 0 16px; }
     .grid { display:grid; gap:16px; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); }
     .card { background:#121833; border:1px solid #20295a; border-radius:16px; padding:16px; box-shadow:0 10px 24px rgba(0,0,0,.25); }
     .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+
     input, select { background:#0f172a; color:#e2e8f0; border:1px solid #334155; padding:8px 10px; border-radius:8px; }
-    button { background:#334155; color:#e2e8f0; border:none; padding:10px 14px; border-radius:10px; cursor:pointer; font-weight:600; transition: filter .15s; }
+    button { background:#334155; color:#e2e8f0; border:none; padding:10px 14px; border-radius:10px; cursor:pointer; font-weight:600; transition:filter .15s; }
     button:hover { filter:brightness(1.1); }
 
-    /* màu trạng thái ngay trên NÚT */
-    .btn-green { background:#166534 !important; color:#dcfce7 !important; } /* LED ON / Chuông đang báo */
-    .btn-red   { background:#7f1d1d !important; color:#fee2e2 !important; } /* LED OFF */
+    /* Màu “trạng thái” cho NÚT */
+    .btn-green { background:#166534 !important; color:#dcfce7 !important; } /* xanh */
+    /* xám = màu button mặc định (#334155) */
+
+    .pill { padding:4px 10px; border-radius:999px; font-weight:700; }
+    .ok{ background:#193d2f; color:#86efac; } .bad{ background:#4a1d1d; color:#fecaca; } .warn{ background:#3b2d14; color:#fde68a; }
 
     canvas { background:#0f172a; border-radius:12px; padding:8px; }
 
@@ -32,9 +35,13 @@
     .tag-rx{  background:#12381e; color:#86efac; }
     .tag-tx{  background:#0f2d3a; color:#93c5fd; }
     .tag-sys{ background:#2a2438; color:#e9d5ff; }
-    .tag-err{ background:#4a1d1d; color:#fecaca; }
+    .tag-err{  background:#4a1d1d; color:#fecaca; }
     .log-text { white-space:pre-wrap; word-break:break-word; }
     .controls { display:flex; gap:8px; margin-bottom:8px; align-items:center; }
+
+    /* Banner cảnh báo */
+    .banner { display:none; position:fixed; inset:0; place-items:center; background:rgba(0,0,0,.6); }
+    .banner .inner { background:#1b0b0b; border:2px solid #7f1d1d; padding:24px; border-radius:16px; text-align:center; }
   </style>
 </head>
 <body>
@@ -48,7 +55,7 @@
         <input id="brokerUrl" style="flex:1 1 320px" value="wss://test.mosquitto.org:8081/mqtt" />
         <input id="topicBase" value="iot/fire1" />
         <button id="btnConnect">Kết nối</button>
-        <span id="connState" class="pill warn" style="padding:4px 10px;border-radius:999px;font-weight:700;background:#3b2d14;color:#fde68a;">Chưa kết nối</span>
+        <span id="connState" class="pill warn">Chưa kết nối</span>
       </div>
       <small>Gợi ý: đa số broker WebSocket dùng đường dẫn <code>/mqtt</code>. Nếu trang chạy HTTPS, hãy dùng <b>wss://</b>.</small>
     </div>
@@ -57,7 +64,7 @@
     <div class="card">
       <h3>Trạng thái thiết bị</h3>
       <p>Thiết bị: <b id="devStatus">unknown</b></p>
-      <p>Nhiệt độ: <b id="tempNow">--</b> °C — Độ ẩm: <b id="humNow">--</b> % — Khói (ADC): <b id="smokeNow">--</b></p>
+      <p>Nhiệt độ: <b id="tempNow">--</b> °C — Độ ẩm: <b id="humNow">--</b> % — Khói: <b id="smokeNow">--</b></p>
 
       <div class="row" style="margin-top:10px;">
         <button id="btnSilence">Tắt chuông 60s</button>
@@ -95,8 +102,8 @@
   </div>
 
   <!-- Cảnh báo -->
-  <div id="alertBanner" class="banner" style="display:none; position:fixed; inset:0; place-items:center; background:rgba(0,0,0,.6);">
-    <div class="inner" style="background:#1b0b0b; border:2px solid #7f1d1d; padding:24px; border-radius:16px; text-align:center;">
+  <div id="alertBanner" class="banner">
+    <div class="inner">
       <h2>⚠️ PHÁT HIỆN CHÁY</h2>
       <p id="alertText">Chi tiết...</p>
       <div class="row" style="justify-content:center; margin-top:12px;">
@@ -116,14 +123,14 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
   <script>
-    // ====== Helpers ======
+    // ===== Helpers =====
     const $ = (id) => document.getElementById(id);
-    function setConnState(s, cls='warn') { const el=$('connState'); el.textContent=s; el.className = 'pill ' + cls; el.style.padding='4px 10px'; el.style.borderRadius='999px'; el.style.fontWeight='700'; }
+    function setConnState(s, cls='warn'){ const el=$('connState'); el.textContent=s; el.className='pill '+cls; }
 
-    // ---- Log helpers (dòng, timestamp, nhãn) ----
-    const logStore = [];
-    function nowTs(){ const d=new Date(); return d.toLocaleTimeString(); }
-    function logLine(kind, text){
+    // ---- Log (từng dòng) ----
+    const logStore=[];
+    function nowTs(){ return new Date().toLocaleTimeString(); }
+    function logLine(kind,text){
       const list=$('logList'), scroller=$('logWrap');
       const line=document.createElement('div'); line.className='log-line';
       const tm=document.createElement('span'); tm.className='log-time'; tm.textContent=nowTs();
@@ -134,73 +141,66 @@
       if($('autoScroll').checked) scroller.scrollTop=scroller.scrollHeight;
     }
     $('btnClear').onclick=()=>{ $('logList').innerHTML=''; logStore.length=0; };
-    $('btnDownload').onclick=()=>{
-      const blob=new Blob([logStore.join('\n')],{type:'text/plain;charset=utf-8'});
-      const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`mqtt-log-${Date.now()}.txt`; a.click(); URL.revokeObjectURL(a.href);
-    };
+    $('btnDownload').onclick=()=>{ const b=new Blob([logStore.join('\n')],{type:'text/plain;charset=utf-8'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download=`mqtt-log-${Date.now()}.txt`; a.click(); URL.revokeObjectURL(a.href); };
 
-    // ====== State ======
-    let client=null;
-    let topicBase='iot/fire1';
-    let dataRealtime=[];     // {t:Date, v:number}
-    let dataToday=new Map(); // hour -> [vals]
-    let ledState=null;       // null: chưa biết | true: ON | false: OFF
-    let alarmState=false;    // chuông/alert đang báo?
-    const SMOKE_THRESHOLD=1700;
-    const TEMP_THRESHOLD=55;
+    // ===== State =====
+    let client=null, topicBase='iot/fire1';
+    let dataRealtime=[], dataToday=new Map();
+    let alarmState=false; // có cháy/đang báo?
+    const SMOKE_THRESHOLD=1700, TEMP_THRESHOLD=55;
 
-    // ====== Chart ======
-    const ctx=$('chart').getContext('2d');
-    const chart=new Chart(ctx,{type:'line',data:{labels:[],datasets:[{label:'Nhiệt độ (°C)',data:[],fill:false,tension:.2}]},options:{responsive:true,scales:{y:{beginAtZero:false}}}});
+    // ===== Chart =====
+    const chart=new Chart($('chart').getContext('2d'),{
+      type:'line',
+      data:{labels:[],datasets:[{label:'Nhiệt độ (°C)',data:[],fill:false,tension:.2}]},
+      options:{responsive:true,scales:{y:{beginAtZero:false}}}
+    });
     function updateChartRealtime(){ chart.data.labels=dataRealtime.map(p=>p.t.toLocaleTimeString()); chart.data.datasets[0].data=dataRealtime.map(p=>p.v); chart.update(); }
-    function updateChartToday(){ const hours=[...dataToday.keys()].sort((a,b)=>a-b); const avg=a=>a.reduce((s,x)=>s+x,0)/a.length; chart.data.labels=hours.map(h=>h+':00'); chart.data.datasets[0].data=hours.map(h=>avg(dataToday.get(h))); chart.update(); }
+    function updateChartToday(){ const hours=[...dataToday.keys()].sort((a,b)=>a-b), avg=a=>a.reduce((s,x)=>s+x,0)/a.length; chart.data.labels=hours.map(h=>h+':00'); chart.data.datasets[0].data=hours.map(h=>avg(dataToday.get(h))); chart.update(); }
     function updateChartSession(){ const b={'Sáng':[],'Trưa':[],'Chiều':[],'Tối':[]}; for(const {t,v} of dataRealtime){const h=t.getHours(); if(h>=5&&h<11)b['Sáng'].push(v); else if(h>=11&&h<13)b['Trưa'].push(v); else if(h>=13&&h<17)b['Chiều'].push(v); else if(h>=17&&h<22)b['Tối'].push(v);} const avg=a=>a.length?(a.reduce((s,x)=>s+x,0)/a.length):null; chart.data.labels=Object.keys(b); chart.data.datasets[0].data=Object.values(b).map(avg); chart.update(); }
     $('mode').addEventListener('change',()=>{ const m=$('mode').value; if(m==='realtime')updateChartRealtime(); else if(m==='today')updateChartToday(); else updateChartSession(); });
 
-    // ====== Cập nhật màu cho NÚT dựa trên trạng thái ======
-    function updateButtons(){
-      const onBtn=$('btnLedOn'), offBtn=$('btnLedOff'), silBtn=$('btnSilence');
-      // LED buttons
-      onBtn.classList.remove('btn-green','btn-red');
-      offBtn.classList.remove('btn-green','btn-red');
-      if(ledState===true){ onBtn.classList.add('btn-green'); }       // LED ON => xanh trên nút "LED ON"
-      else if(ledState===false){ offBtn.classList.add('btn-red'); }  // LED OFF => đỏ trên nút "LED OFF"
-      // Silence button reflects alarm
-      silBtn.classList.remove('btn-green');
-      if(alarmState===true){ silBtn.classList.add('btn-green'); }    // đang báo => "Tắt chuông 60s" xanh
+    // ===== Nút màu theo yêu cầu =====
+    function refreshButtons(){
+      // LED ON: xanh khi alarmState=true, xám khi không
+      $('btnLedOn').classList.toggle('btn-green', alarmState===true);
+      // Tắt chuông 60s: xanh khi đang báo, xám khi không
+      $('btnSilence').classList.toggle('btn-green', alarmState===true);
+      // LED OFF giữ màu xám mặc định
     }
     function setAlarm(on){
-      alarmState=on;
-      document.body.classList.toggle('alarm', on); // (nếu không muốn đổi nền trang, xóa dòng này)
-      updateButtons();
+      alarmState = !!on;
+      refreshButtons();
     }
 
-    // ====== Notifications ======
+    // ===== Notifications & banner =====
     function ensureNotif(){ if('Notification' in window && Notification.permission==='default') Notification.requestPermission(); }
     function showAlert(payload){
       const text=`🔥 FIRE @ ${new Date(payload.ts*1000).toLocaleString()} — T=${payload.temp_c}°C, smoke=${payload.smoke_raw}`;
-      $('alertText').textContent=text; $('alertBanner').style.display='grid'; try{$('beep').play();}catch{}
+      $('alertText').textContent=text;
+      $('alertBanner').style.display='grid';
+      try{ $('beep').play(); }catch{}
       if('Notification' in window && Notification.permission==='granted') new Notification('Phát hiện cháy',{body:text});
     }
     $('btnAck').onclick=()=>{ $('alertBanner').style.display='none'; };
     $('btnAckSilence').onclick=()=>{ publish(`${topicBase}/cmd/buzzer`, 'silence:60'); $('alertBanner').style.display='none'; setAlarm(false); };
 
-    // ====== MQTT ======
+    // ===== MQTT =====
     function connect(){
       const url=$('brokerUrl').value.trim();
       topicBase=$('topicBase').value.trim() || 'iot/fire1';
       ensureNotif();
       client=mqtt.connect(url,{clientId:'webdash-'+Math.random().toString(16).slice(2), keepalive:60, clean:true});
-      client.on('connect',()=>{ setConnState('Đã kết nối','ok'); logLine('sys', `[MQTT] connected to ${url}`); client.subscribe(`${topicBase}/#`); });
+      client.on('connect',()=>{ setConnState('Đã kết nối','ok'); logLine('sys',`[MQTT] connected to ${url}`); client.subscribe(`${topicBase}/#`); });
       client.on('reconnect',()=>setConnState('Đang kết nối lại...','warn'));
       client.on('close',()=>setConnState('Mất kết nối','bad'));
       client.on('error',e=>{ logLine('err','[MQTT error] '+e.message); setConnState('Lỗi','bad'); });
       client.on('message',(topic,msg)=>handleMsg(topic, msg.toString()));
     }
-    function publish(topic,payload){ if(!client||!client.connected) return; client.publish(topic,payload); logLine('tx', `→ ${topic}: ${payload}`); }
+    function publish(topic,payload){ if(!client||!client.connected) return; client.publish(topic,payload); logLine('tx',`→ ${topic}: ${payload}`); }
 
     function handleMsg(topic,s){
-      logLine('rx', `← ${topic}: ${s}`);
+      logLine('rx',`← ${topic}: ${s}`);
       if(topic.endsWith('/status')){
         $('devStatus').textContent=s;
       } else if(topic.endsWith('/telemetry')){
@@ -214,7 +214,7 @@
           dataRealtime.push({t, v:o.temp_c}); if(dataRealtime.length>200) dataRealtime.shift();
           const h=t.getHours(); if(!dataToday.has(h)) dataToday.set(h,[]); if(typeof o.temp_c==='number') dataToday.get(h).push(o.temp_c);
 
-          // Suy ra báo động từ ngưỡng
+          // Suy ra có cháy?
           const isFire=((typeof o.smoke_raw==='number') && o.smoke_raw>=SMOKE_THRESHOLD) || ((typeof o.temp_c==='number') && o.temp_c>=TEMP_THRESHOLD);
           setAlarm(isFire);
 
@@ -222,20 +222,18 @@
         }catch{}
       } else if(topic.endsWith('/alert')){
         try{ const p=JSON.parse(s); setAlarm(true); showAlert(p); }
-        catch{ setAlarm(true); showAlert({ts:Date.now()/1000,temp_c:'?',smoke_raw:'?'}); }
-      } else if(topic.endsWith('/state/led')){
-        // Nếu ESP32 publish state/led (khuyên dùng để đồng bộ đúng)
-        const v=s.trim().toLowerCase(); ledState=(v==='on')?true:(v==='off')?false:null; updateButtons();
+        catch{ setAlarm(true); showAlert({ts:Date.now()/1000, temp_c:'?', smoke_raw:'?'}); }
       } else if(topic.endsWith('/state/buzzer')){
+        // nếu ESP32 publish state/buzzer => đồng bộ màu nút
         const v=s.trim().toLowerCase(); setAlarm(v==='on');
       }
     }
 
-    // ====== Buttons ======
+    // ===== Buttons =====
     $('btnConnect').onclick=connect;
     $('btnSilence').onclick=()=>{ publish(`${topicBase}/cmd/buzzer`, 'silence:60'); setAlarm(false); };
-    $('btnLedOn').onclick =()=>{ publish(`${topicBase}/cmd/led`, 'on');  ledState=true;  updateButtons(); };
-    $('btnLedOff').onclick=()=>{ publish(`${topicBase}/cmd/led`, 'off'); ledState=false; updateButtons(); };
+    $('btnLedOn').onclick =()=>{ publish(`${topicBase}/cmd/led`, 'on');  /* màu nút phụ thuộc alarmState, không phụ thuộc LED thật */ refreshButtons(); };
+    $('btnLedOff').onclick=()=>{ publish(`${topicBase}/cmd/led`, 'off'); /* giữ xám */ refreshButtons(); };
   </script>
 </body>
 </html>
